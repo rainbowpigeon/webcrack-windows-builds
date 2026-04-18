@@ -3,7 +3,7 @@ import * as m from '@codemod/matchers';
 import type { Transform } from '../ast-utils';
 
 const FUNCTIONS = {
-  atob,
+  ...(typeof globalThis.atob === 'function' ? { atob: globalThis.atob } : {}),
   unescape,
   decodeURI,
   decodeURIComponent,
@@ -29,11 +29,10 @@ export default {
           if (path.scope.hasBinding(name.current!, { noGlobals: true })) return;
 
           try {
+            const fn = FUNCTIONS[name.current!];
+            if (!fn) return;
             // Causes a "TypeError: Illegal invocation" without the globalThis receiver
-            const value = FUNCTIONS[name.current!].call(
-              globalThis,
-              arg.current!,
-            );
+            const value = fn.call(globalThis, arg.current!);
             path.replaceWith(t.stringLiteral(value));
             this.changes++;
           } catch {

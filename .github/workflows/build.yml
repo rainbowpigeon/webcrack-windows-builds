@@ -1,0 +1,324 @@
+name: Build Windows CLI EXE
+
+on:
+  push:
+    branches: [master]
+    tags:
+      - 'v*'
+    paths:
+      - '.github/workflows/windows-cli-exe.yml'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'turbo.json'
+      - 'packages/webcrack/**'
+
+concurrency:
+  group: windows-cli-exe-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22.x'
+  PNPM_VERSION: 10.12.4
+  BUN_VERSION: 1.2.15
+  DENO_VERSION: 2.4.3
+  ARTIFACT_RETENTION_DAYS: 14
+  WINDOWS_EXE_TARGETS: pkg sea nexe bun deno
+
+jobs:
+  build-windows-exe:
+    name: Build standalone Windows x64 EXE (${{ matrix.target }})
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        target: [pkg, sea, nexe, bun, deno]
+    env:
+      DENO_DIR: ${{ github.workspace }}/.deno
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - uses: denoland/setup-deno@667a34cdef165d8d2b2e98dde39547c9daac7282 # v2.0.4
+        with:
+          deno-version: ${{ env.DENO_VERSION }}
+
+      - name: Cache Bun and Deno dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            ./.deno
+          key: windows-cli-exe-${{ runner.os }}-bun-${{ env.BUN_VERSION }}-deno-${{ env.DENO_VERSION }}-${{ hashFiles('pnpm-lock.yaml', 'packages/webcrack/package.json', 'packages/webcrack/esbuild.config.js', 'packages/webcrack/scripts/build-cli-entrypoints.mjs') }}
+          restore-keys: |
+            windows-cli-exe-${{ runner.os }}-bun-${{ env.BUN_VERSION }}-deno-${{ env.DENO_VERSION }}-
+            windows-cli-exe-${{ runner.os }}-bun-deno-
+
+      - name: Sanity check tool versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version
+          pnpm --version
+          bun --version
+          deno --version
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+
+      - name: Typecheck webcrack
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.run_typecheck != 'false' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --filter webcrack typecheck
+
+      - name: Build CLI package
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --filter webcrack build
+
+      - name: Build bundled CLI entrypoints for executable targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cd packages/webcrack
+          node scripts/build-cli-entrypoints.mjs
+
+      - name: Build pkg executable
+        if: matrix.target == 'pkg'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd packages/webcrack
+          bunx @yao-pkg/pkg@6.6.0 dist/cli-package.cjs --targets node22-win-x64 --no-bytecode --public --public-packages "*" --output ../../artifacts/webcrack-win-x64-pkg.exe |& tee ../../artifacts/build-pkg.log
+
+      - name: Build SEA executable
+        if: matrix.target == 'sea'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd packages/webcrack
+          {
+            printf '%s\n' \
+              '{' \
+              '  "main": "./dist/cli-package.cjs",' \
+              '  "output": "./dist/webcrack.sea.blob",' \
+              '  "disableExperimentalSEAWarning": true' \
+              '}' > sea-config.json
+            node --experimental-sea-config sea-config.json
+            cp "$(command -v node)" ../../artifacts/webcrack-win-x64-sea.exe
+            if command -v signtool >/dev/null 2>&1; then
+              signtool remove /s ../../artifacts/webcrack-win-x64-sea.exe || true
+            fi
+            bunx postject@1.0.0-alpha.6 ../../artifacts/webcrack-win-x64-sea.exe NODE_SEA_BLOB dist/webcrack.sea.blob --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
+          } |& tee ../../artifacts/build-sea.log
+
+      - name: Build nexe executable
+        if: matrix.target == 'nexe'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd packages/webcrack
+          bunx nexe@5.0.0-beta.4 dist/cli-package-nexe.cjs --target windows-x64-14.15.3 --output ../../artifacts/webcrack-win-x64-nexe.exe |& tee ../../artifacts/build-nexe.log
+
+      - name: Build Bun executable
+        if: matrix.target == 'bun'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd packages/webcrack
+          bun build dist/cli-package.cjs --compile --target=bun-windows-x64-modern --external @babel/preset-typescript/package.json --outfile ../../artifacts/webcrack-win-x64-bun.exe |& tee ../../artifacts/build-bun.log
+
+      - name: Build Deno executable
+        if: matrix.target == 'deno'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd packages/webcrack
+          deno compile \
+            --allow-read \
+            --allow-write \
+            --allow-env \
+            --allow-run \
+            --allow-sys \
+            --target x86_64-pc-windows-msvc \
+            --output ../../artifacts/webcrack-win-x64-deno.exe \
+            dist/cli-package.cjs |& tee ../../artifacts/build-deno.log
+
+      - name: Verify executable metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe="artifacts/webcrack-win-x64-${{ matrix.target }}.exe"
+          test -f "$exe"
+          size_bytes="$(wc -c < "$exe" | tr -d '[:space:]')"
+          test "$size_bytes" -gt 0
+          sha256sum "$exe" > "artifacts/${{ matrix.target }}.sha256"
+          {
+            echo "target=${{ matrix.target }}"
+            echo "path=$exe"
+            echo "size_bytes=$size_bytes"
+            echo "sha256=$(cut -d' ' -f1 "artifacts/${{ matrix.target }}.sha256")"
+          } > "artifacts/${{ matrix.target }}-metadata.txt"
+
+      - name: Upload Windows EXE artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: webcrack-win-x64-${{ matrix.target }}
+          path: artifacts/webcrack-win-x64-${{ matrix.target }}.exe
+          if-no-files-found: error
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+
+      - name: Upload executable metadata artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: webcrack-win-x64-${{ matrix.target }}-metadata
+          path: |
+            artifacts/${{ matrix.target }}-metadata.txt
+            artifacts/${{ matrix.target }}.sha256
+          if-no-files-found: error
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+
+      - name: Collect per-target diagnostics
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/diagnostics
+          for file in "artifacts/build-${{ matrix.target }}.log" "artifacts/${{ matrix.target }}-metadata.txt" "artifacts/${{ matrix.target }}.sha256"; do
+            if [ -f "$file" ]; then
+              cp "$file" artifacts/diagnostics/
+            fi
+          done
+          exe="artifacts/webcrack-win-x64-${{ matrix.target }}.exe"
+          if [ -f "$exe" ]; then
+            wc -c "$exe" > "artifacts/diagnostics/${{ matrix.target }}-exe-size.txt"
+            sha256sum "$exe" > "artifacts/diagnostics/${{ matrix.target }}-exe.sha256"
+          fi
+
+      - name: Upload per-target diagnostics
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: webcrack-win-x64-${{ matrix.target }}-diagnostics
+          path: artifacts/diagnostics
+          if-no-files-found: ignore
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+
+  smoke-test-windows-exe:
+    name: Smoke test standalone Windows x64 EXEs
+    runs-on: windows-latest
+    timeout-minutes: 20
+    needs: build-windows-exe
+    steps:
+      - name: Download executable artifacts
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: webcrack-win-x64-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Inventory downloaded artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -lah artifacts
+          for target in $WINDOWS_EXE_TARGETS; do
+            exe="artifacts/webcrack-win-x64-${target}.exe"
+            test -f "$exe"
+            wc -c "$exe"
+          done
+          sha256sum artifacts/webcrack-win-x64-*.exe > artifacts/downloaded-exes.sha256
+
+      - name: Verify executable hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in $WINDOWS_EXE_TARGETS; do
+            sha256sum -c "artifacts/${target}.sha256"
+          done
+
+      - name: Smoke test standalone EXEs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > artifacts/sample.js <<'EOF'
+          (function(_0x43f0d3,_0x58b9db){const _0x58b738=function(_0x1846ec){while(--_0x1846ec){_0x43f0d3.push(_0x43f0d3.shift());}};_0x58b738(++_0x58b9db);}(['log','smoke-test','join','fromCharCode','length'],0x14));const _0x3e0b=function(_0x10fd8a,_0x3c1f16){_0x10fd8a=_0x10fd8a-0x0;return ['log','smoke-test','join','fromCharCode','length'][_0x10fd8a];};const _0xpayload=[0x73,0x6d,0x6f,0x6b,0x65,0x2d,0x74,0x65,0x73,0x74].map((_0x6d8f3a)=>String[_0x3e0b(0x3)](_0x6d8f3a))[_0x3e0b(0x2)]('');if(_0xpayload[_0x3e0b(0x4)]===0xa){console[_0x3e0b(0x0)](_0xpayload);}
+          EOF
+
+          ./artifacts/webcrack-win-x64-pkg.exe artifacts/sample.js > artifacts/pkg-output.js
+          ./artifacts/webcrack-win-x64-sea.exe artifacts/sample.js > artifacts/sea-output.js
+          ./artifacts/webcrack-win-x64-nexe.exe artifacts/sample.js > artifacts/nexe-output.js
+          ./artifacts/webcrack-win-x64-bun.exe artifacts/sample.js > artifacts/bun-output.js
+          ./artifacts/webcrack-win-x64-deno.exe artifacts/sample.js > artifacts/deno-output.js
+
+          grep -F 'smoke-test' artifacts/pkg-output.js
+          grep -F 'smoke-test' artifacts/sea-output.js
+          grep -F 'smoke-test' artifacts/nexe-output.js
+          grep -F 'smoke-test' artifacts/bun-output.js
+          grep -F 'smoke-test' artifacts/deno-output.js
+
+      - name: Upload smoke test outputs on failure
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: webcrack-win-x64-smoke-outputs
+          path: |
+            artifacts/*-output.js
+            artifacts/sample.js
+            artifacts/downloaded-exes.sha256
+          if-no-files-found: ignore
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+
+  publish-release-windows-exe-assets:
+    name: Publish Windows EXE assets to release
+    runs-on: ubuntu-latest
+    needs: smoke-test-windows-exe
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download executable artifacts
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: webcrack-win-x64-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Attach EXEs to GitHub release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          files: |
+            artifacts/webcrack-win-x64-pkg.exe
+            artifacts/webcrack-win-x64-sea.exe
+            artifacts/webcrack-win-x64-nexe.exe
+            artifacts/webcrack-win-x64-bun.exe
+            artifacts/webcrack-win-x64-deno.exe
+          fail_on_unmatched_files: true
