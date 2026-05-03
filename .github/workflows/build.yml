@@ -6,7 +6,7 @@ on:
     tags:
       - 'v*'
     paths:
-      - '.github/workflows/windows-cli-exe.yml'
+      - '.github/workflows/build.yml'
       - 'package.json'
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
@@ -91,7 +91,7 @@ jobs:
           pnpm install --frozen-lockfile
 
       - name: Typecheck webcrack
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.run_typecheck != 'false' }}
+        if: ${{ github.event_name != 'workflow_dispatch' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -166,8 +166,6 @@ jobs:
             --allow-read \
             --allow-write \
             --allow-env \
-            --allow-run \
-            --allow-sys \
             --target x86_64-pc-windows-msvc \
             --output ../../artifacts/webcrack-win-x64-deno.exe \
             dist/cli-package.cjs |& tee ../../artifacts/build-deno.log
@@ -273,17 +271,11 @@ jobs:
           (function(_0x43f0d3,_0x58b9db){const _0x58b738=function(_0x1846ec){while(--_0x1846ec){_0x43f0d3.push(_0x43f0d3.shift());}};_0x58b738(++_0x58b9db);}(['log','smoke-test','join','fromCharCode','length'],0x14));const _0x3e0b=function(_0x10fd8a,_0x3c1f16){_0x10fd8a=_0x10fd8a-0x0;return ['log','smoke-test','join','fromCharCode','length'][_0x10fd8a];};const _0xpayload=[0x73,0x6d,0x6f,0x6b,0x65,0x2d,0x74,0x65,0x73,0x74].map((_0x6d8f3a)=>String[_0x3e0b(0x3)](_0x6d8f3a))[_0x3e0b(0x2)]('');if(_0xpayload[_0x3e0b(0x4)]===0xa){console[_0x3e0b(0x0)](_0xpayload);}
           EOF
 
-          ./artifacts/webcrack-win-x64-pkg.exe artifacts/sample.js > artifacts/pkg-output.js
-          ./artifacts/webcrack-win-x64-sea.exe artifacts/sample.js > artifacts/sea-output.js
-          ./artifacts/webcrack-win-x64-nexe.exe artifacts/sample.js > artifacts/nexe-output.js
-          ./artifacts/webcrack-win-x64-bun.exe artifacts/sample.js > artifacts/bun-output.js
-          ./artifacts/webcrack-win-x64-deno.exe artifacts/sample.js > artifacts/deno-output.js
-
-          grep -F 'smoke-test' artifacts/pkg-output.js
-          grep -F 'smoke-test' artifacts/sea-output.js
-          grep -F 'smoke-test' artifacts/nexe-output.js
-          grep -F 'smoke-test' artifacts/bun-output.js
-          grep -F 'smoke-test' artifacts/deno-output.js
+          for target in $WINDOWS_EXE_TARGETS; do
+            ./artifacts/webcrack-win-x64-${target}.exe artifacts/sample.js > "artifacts/${target}-output.js"
+            grep -F 'smoke-test' "artifacts/${target}-output.js"
+            node --check "artifacts/${target}-output.js"
+          done
 
       - name: Upload smoke test outputs on failure
         if: failure()
@@ -315,10 +307,5 @@ jobs:
       - name: Attach EXEs to GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          files: |
-            artifacts/webcrack-win-x64-pkg.exe
-            artifacts/webcrack-win-x64-sea.exe
-            artifacts/webcrack-win-x64-nexe.exe
-            artifacts/webcrack-win-x64-bun.exe
-            artifacts/webcrack-win-x64-deno.exe
+          files: artifacts/webcrack-win-x64-*.exe
           fail_on_unmatched_files: true
