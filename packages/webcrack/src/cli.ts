@@ -2,16 +2,41 @@
 
 import { program } from 'commander';
 import debug from 'debug';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { readFile, rm } from 'node:fs/promises';
-import { join } from 'node:path';
-import * as url from 'node:url';
+import { createRequire } from 'node:module';
 import { webcrack } from './index.js';
 
-const __dirname = url.fileURLToPath(new URL('.', import.meta.url));
-const { version, description } = JSON.parse(
-  readFileSync(join(__dirname, '..', 'package.json'), 'utf8'),
-) as { version: string; description: string };
+const requireBase = (() => {
+  if (!(process.argv[1] && existsSync(process.argv[1]))) {
+    return process.execPath;
+  }
+  try {
+    return realpathSync(process.argv[1]);
+  } catch (error) {
+    debug('webcrack:cli')(
+      'Failed to resolve CLI entry path to real filesystem location, using process.execPath (package metadata may be unresolved)',
+      error,
+    );
+    return process.execPath;
+  }
+})();
+const require = createRequire(requireBase);
+let version = '0.0.0';
+let description = 'Deobfuscate, unminify and unpack bundled javascript';
+try {
+  const packageJson = require('../package.json') as {
+    version?: string;
+    description?: string;
+  };
+  version = packageJson.version ?? version;
+  description = packageJson.description ?? description;
+} catch (error) {
+  debug('webcrack:cli')(
+    'Failed to load package metadata, using fallback version 0.0.0 and default description',
+    error,
+  );
+}
 
 debug.enable('webcrack:*');
 
