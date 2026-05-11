@@ -26,6 +26,11 @@ env:
   PNPM_VERSION: 10.33.2
   BUN_VERSION: 1.2.15
   DENO_VERSION: 2.4.3
+  PKG_VERSION: '6.6.0'
+  POSTJECT_VERSION: '1.0.0-alpha.6'
+  NEXE_VERSION: '5.0.0-beta.4'
+  PKG_TARGET: 'node22-win-x64'
+  NEXE_TARGET: 'windows-x64-14.15.3'
   ARTIFACT_RETENTION_DAYS: 14
   WINDOWS_EXE_TARGETS: pkg sea nexe bun deno
 
@@ -42,7 +47,7 @@ jobs:
     env:
       DENO_DIR: ${{ github.workspace }}/.deno
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6
         with:
           persist-credentials: false
 
@@ -51,7 +56,7 @@ jobs:
           version: ${{ env.PNPM_VERSION }}
           run_install: false
 
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
@@ -66,7 +71,7 @@ jobs:
           deno-version: ${{ env.DENO_VERSION }}
 
       - name: Cache Bun and Deno dependencies
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@a7833574556fa59680c1b7cb190c1735db73ebf0 # v5
         with:
           path: |
             ~/.bun/install/cache
@@ -118,7 +123,7 @@ jobs:
         run: |
           set -euo pipefail
           cd packages/webcrack
-          bunx @yao-pkg/pkg@6.6.0 dist/cli-package.cjs --targets node22-win-x64 --no-bytecode --public --public-packages "*" --output ../../artifacts/webcrack-win-x64-pkg.exe |& tee ../../artifacts/build-pkg.log
+          bunx @yao-pkg/pkg@$PKG_VERSION dist/cli-package.cjs --targets $PKG_TARGET --no-bytecode --public --public-packages "*" --output ../../artifacts/webcrack-win-x64-pkg.exe 2>&1 | tee ../../artifacts/build-pkg.log
 
       - name: Build SEA executable
         if: matrix.target == 'sea'
@@ -138,9 +143,9 @@ jobs:
             if command -v signtool >/dev/null 2>&1; then
               signtool remove /s ../../artifacts/webcrack-win-x64-sea.exe || true
             fi
-            bunx postject@1.0.0-alpha.6 ../../artifacts/webcrack-win-x64-sea.exe NODE_SEA_BLOB dist/webcrack.sea.blob --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
+            bunx postject@$POSTJECT_VERSION ../../artifacts/webcrack-win-x64-sea.exe NODE_SEA_BLOB dist/webcrack.sea.blob --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
             rm -f sea-config.json
-          } |& tee ../../artifacts/build-sea.log
+          } 2>&1 | tee ../../artifacts/build-sea.log
 
       - name: Build nexe executable
         if: matrix.target == 'nexe'
@@ -148,7 +153,7 @@ jobs:
         run: |
           set -euo pipefail
           cd packages/webcrack
-          bunx nexe@5.0.0-beta.4 dist/cli-package-nexe.cjs --target windows-x64-14.15.3 --output ../../artifacts/webcrack-win-x64-nexe.exe |& tee ../../artifacts/build-nexe.log
+          bunx nexe@$NEXE_VERSION dist/cli-package-nexe.cjs --target $NEXE_TARGET --output ../../artifacts/webcrack-win-x64-nexe.exe 2>&1 | tee ../../artifacts/build-nexe.log
 
       - name: Build Bun executable
         if: matrix.target == 'bun'
@@ -156,7 +161,7 @@ jobs:
         run: |
           set -euo pipefail
           cd packages/webcrack
-          bun build dist/cli-package.cjs --compile --target=bun-windows-x64-modern --external @babel/preset-typescript/package.json --outfile ../../artifacts/webcrack-win-x64-bun.exe |& tee ../../artifacts/build-bun.log
+          bun build dist/cli-package.cjs --compile --target=bun-windows-x64-modern --external @babel/preset-typescript/package.json --outfile ../../artifacts/webcrack-win-x64-bun.exe 2>&1 | tee ../../artifacts/build-bun.log
 
       - name: Build Deno executable
         if: matrix.target == 'deno'
@@ -171,7 +176,7 @@ jobs:
             --allow-sys=osRelease \
             --target x86_64-pc-windows-msvc \
             --output ../../artifacts/webcrack-win-x64-deno.exe \
-            dist/cli-package.cjs |& tee ../../artifacts/build-deno.log
+            dist/cli-package.cjs 2>&1 | tee ../../artifacts/build-deno.log
 
       - name: Verify executable metadata
         shell: bash
@@ -239,7 +244,7 @@ jobs:
     needs: build-windows-exe
     steps:
       - name: Download executable artifacts
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
         with:
           pattern: webcrack-win-x64-*
           path: artifacts
@@ -292,7 +297,7 @@ jobs:
       contents: write
     steps:
       - name: Download executable artifacts
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
         with:
           pattern: webcrack-win-x64-*-exe
           path: artifacts
