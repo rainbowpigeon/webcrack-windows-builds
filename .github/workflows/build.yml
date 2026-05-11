@@ -1,6 +1,7 @@
 name: Build Windows CLI EXE
 
 on:
+  workflow_dispatch:
   push:
     branches: [master]
     tags:
@@ -138,6 +139,7 @@ jobs:
               signtool remove /s ../../artifacts/webcrack-win-x64-sea.exe || true
             fi
             bunx postject@1.0.0-alpha.6 ../../artifacts/webcrack-win-x64-sea.exe NODE_SEA_BLOB dist/webcrack.sea.blob --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
+            rm -f sea-config.json
           } |& tee ../../artifacts/build-sea.log
 
       - name: Build nexe executable
@@ -166,6 +168,7 @@ jobs:
             --allow-read \
             --allow-write \
             --allow-env \
+            --allow-sys=osRelease \
             --target x86_64-pc-windows-msvc \
             --output ../../artifacts/webcrack-win-x64-deno.exe \
             dist/cli-package.cjs |& tee ../../artifacts/build-deno.log
@@ -189,7 +192,7 @@ jobs:
       - name: Upload Windows EXE artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: webcrack-win-x64-${{ matrix.target }}
+          name: webcrack-win-x64-${{ matrix.target }}-exe
           path: artifacts/webcrack-win-x64-${{ matrix.target }}.exe
           if-no-files-found: error
           retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
@@ -205,7 +208,7 @@ jobs:
           retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
 
       - name: Collect per-target diagnostics
-        if: always()
+        if: failure()
         shell: bash
         run: |
           set -euo pipefail
@@ -218,11 +221,10 @@ jobs:
           exe="artifacts/webcrack-win-x64-${{ matrix.target }}.exe"
           if [ -f "$exe" ]; then
             wc -c "$exe" > "artifacts/diagnostics/${{ matrix.target }}-exe-size.txt"
-            sha256sum "$exe" > "artifacts/diagnostics/${{ matrix.target }}-exe.sha256"
           fi
 
       - name: Upload per-target diagnostics
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: webcrack-win-x64-${{ matrix.target }}-diagnostics
@@ -243,7 +245,7 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Inventory downloaded artifacts
+      - name: Verify downloaded artifacts
         shell: bash
         run: |
           set -euo pipefail
@@ -252,14 +254,6 @@ jobs:
             exe="artifacts/webcrack-win-x64-${target}.exe"
             test -f "$exe"
             wc -c "$exe"
-          done
-          sha256sum artifacts/webcrack-win-x64-*.exe > artifacts/downloaded-exes.sha256
-
-      - name: Verify executable hashes
-        shell: bash
-        run: |
-          set -euo pipefail
-          for target in $WINDOWS_EXE_TARGETS; do
             sha256sum -c "artifacts/${target}.sha256"
           done
 
@@ -285,7 +279,7 @@ jobs:
           path: |
             artifacts/*-output.js
             artifacts/sample.js
-            artifacts/downloaded-exes.sha256
+            artifacts/*.sha256
           if-no-files-found: ignore
           retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
 
@@ -300,7 +294,7 @@ jobs:
       - name: Download executable artifacts
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
-          pattern: webcrack-win-x64-*
+          pattern: webcrack-win-x64-*-exe
           path: artifacts
           merge-multiple: true
 
